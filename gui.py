@@ -10,7 +10,13 @@ from collections import OrderedDict
 from itertools import permutations
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 from PIL import Image, ImageTk
+import pickle
 
+import rpy2.robjects as ro
+from rpy2.robjects import r
+
+import config as scf
+import batch_opt as bop
 import patcl2distr_library as p2d
 
 class PATCL2DistrGUI:
@@ -20,9 +26,9 @@ class PATCL2DistrGUI:
 
         self.statistics = None
         self.workspace = os.path.dirname(os.path.abspath(__file__))
-        self.scalebar_module = self.workspace+'/image/scalebar module/scalebar1.jpg'
+        self.scalebar_module = self.workspace+r'/image/scalebar module/scalebar1.jpg'
         self.scalebar_image, self.pixel_distance, self.physic_distance = None, None, None
-        self.weight = "/Users/helong/Documents/CV practise/sam_vit_h_4b8939.pth"
+        self.weight = os.path.dirname(os.path.abspath(__file__))+r'/Segment-anything/'+r'sam_vit_h_4b8939.pth'
         self.device = 'cpu'
         self.model_type = 'default'
         self.image_file_path = None
@@ -70,7 +76,7 @@ class PATCL2DistrGUI:
         process_image.pack(side=tk.LEFT, ipadx=1, ipady=5)
         process_image.bind("<Button-3>", self.save_statistics_csv)                # 绑定右键单击将统计结果保存至新建的以图片名命名的文件夹中
         new_image = ttk.Button(frame2, text='Clear image', width = 13,
-            command=self.new_image                                                # 不改变标尺信息，重新选择要处理的图片
+            command=self.clear_canvas                                                # 不改变标尺信息，重新选择要处理的图片
             )
         new_image.pack(side=tk.LEFT, ipadx=1, ipady=5)
 
@@ -93,21 +99,22 @@ class PATCL2DistrGUI:
     def init_menu(self):
         # '初始化菜单的方法'
         # 定义菜单条
-        menus = ('File', 'Config', 'Process', 'Help')
+        menus = ('File', 'Config', 'Process', 'Plugins', 'Help')
         # 定义菜单数据
         items = (OrderedDict([
                 # 每项对应一个菜单项，后面元组第一个元素是菜单图标，
                 # 第二个元素是菜单对应的事件处理函数
                 ('New', (None, None)),
-                ('Open', (None, None)),
+                ('Open Project', (None, self.read_pickle)),
+                ('Save Project', (None, self.save_masks)),
                 ('-1', (None, None)),
                 ('Set work space', (None, self.set_workspace)),
                 ('Save CSV', (None, self.save_statistics_csv)),
                 ('-2', (None, None)),
-                ('Exit', (None, None)),
+                ('Exit', (None, self.master.quit)),
                 ]),
-            OrderedDict([('Scale Bar',OrderedDict([('ScaleBar module',(None, None)),
-                ('Config  file path',(None, None)),
+            OrderedDict([('Scale Bar',OrderedDict([('ScaleBar module',(None, self.set_scalebar_module)),
+                ('Config file path',(None, None)),
                 ('-1',(None, None)),
                 ('ScaleBar info Save',(None, self.scalebar_info_to_xls))])), 
                 ('-1', (None, None)),
@@ -117,12 +124,15 @@ class PATCL2DistrGUI:
                          ('Show Segments',(None, self.showSegments)),
                          ('Show Statistics',(None, self.showStatistics)),
                          ('-1',(None, None)), 
-                         ('Packing Optimization',(None, None)),
-                         ('Merge csv',(None, self.merge_two_csv)),
+                         ('Plot Statistics',(None, self.plot_bar_from_csv)), 
                          ('-2',(None, None)), 
-                         ('Statistics from csv',(None, self.plot_bar_from_csv)), 
+                         ('Merge csv',(None, self.merge_two_csv)),
+                         ('Size count',(None, self.count_particle_from_range)),
                 ]),
-            OrderedDict([('Help',(None, None)), 
+            OrderedDict([('ParSD Optimization',(None, self.parSD)), 
+                         ('Batch Optimization(2~3 compound)',(None, self.batch_optimization)), 
+              ]),
+            OrderedDict([('Help',(None, self.show_help)), 
                 ('-1',(None, None)),
                 ('About', (None, self.show_about))]))
         # 使用Menu创建菜单条
@@ -166,7 +176,7 @@ class PATCL2DistrGUI:
     def init_icons(self):
         pass
 
-    def new_image(self):
+    def clear_canvas(self):
         for widget in self.canvas2.winfo_children():
             widget.destroy()
         for widget in self.canvas3.winfo_children():
@@ -174,11 +184,11 @@ class PATCL2DistrGUI:
         self.image_file_path = None
         self.result = None
 
-    # 加载图片
+    # 加载图片，并从config文件夹中查找是否有标尺信息，如果没有则报出提示
     def load_image(self):
         self.image_file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.png")])
         if self.image_file_path:
-            self.image_file_adr.set(self.image_file_path)
+            self.image_file_adr.set(self.image_file_path.split('/')[-1])
         try:
             with open(self.workspace + '/config/'+self.image_file_path.split('/')[-1].split('.')[0]+'_scalebar_cofig.txt', 'r') as f:
                 lines = f.readlines()
@@ -188,17 +198,18 @@ class PATCL2DistrGUI:
             messagebox.showinfo(title='警告',message='配置标尺信息')
         print('pixel and scalebar:', self.pixel_distance, self.physic_distance)
 
-    # 读取比例尺信息
+    # 通过模板匹配和OCR读取比例尺的信息
     def scale_bar_config(self):
         scale_config_filename = self.workspace +'/config/'+ self.image_file_path.split('/')[-1].split('.')[0] +'_scalebar_cofig.txt'
         self.scalebar_image, self.pixel_distance, self.physic_distance = p2d.scalebar_config(
             self.image_file_path, scale_config_filename, self.scalebar_module)
+
         pil_image = Image.fromarray(self.scalebar_image).resize((320,240))
         self.image = ImageTk.PhotoImage(pil_image)
         self.canvas1.create_image(1, 1, anchor=tk.NW, image=self.image)
-    
+    # 保存标尺识别的信息，以便检查识别错误
     def scalebar_info_to_xls(self,even=None):
-        folder_path = self.workspace + r'/export data/' + self.image_file_path.split('/')[-1].split('.')[0]
+        folder_path = self.workspace + r'/Diagnosis/' + self.image_file_path.split('/')[-1].split('.')[0]
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
             print(f"文件夹 '{folder_path}' 不存在，已成功创建。")
@@ -214,35 +225,73 @@ class PATCL2DistrGUI:
         sscc = SAM_Config(self.master, self.weight, self.device, self.model_type)
         self.weight, self.device, self.model_type = sscc.weight, sscc.device, sscc.model_type
 
-    # 保存分割结果
+    # 对分割结果进行粒径统计，保存成csv
     def save_statistics_csv(self, even=None):
         if self.result is not None:
             folder_path = self.workspace + r'/export data/' + self.image_file_path.split('/')[-1].split('.')[0]
             if not os.path.exists(folder_path):
                 os.makedirs(folder_path)
                 print(f"文件夹 '{folder_path}' 不存在，已成功创建。")
+            folder_path2 = self.workspace + r'/Diagnosis/' + self.image_file_path.split('/')[-1].split('.')[0]
+            if not os.path.exists(folder_path2):
+                os.makedirs(folder_path2)
+                print(f"文件夹 '{folder_path}' 不存在，已成功创建。")
             file_name = self.image_file_path.split('/')[-1].split('.')[0]
-            self.result[0].to_csv(folder_path+r'/'+file_name+'_particle.csv', index=False)            # 粒径分布结果
-            self.result[1].to_csv(folder_path+r'/'+file_name+'_statistics.csv', index=True)      # 统计结果
+            self.result[0].to_csv(folder_path+'/'+file_name+'_particle.csv', index=False)            # 粒径分布结果
+            self.result[1].to_csv(folder_path2+'/'+file_name+'_statistics.csv', index=True)           # 统计结果
             messagebox.showinfo(title='警告',message='保存成功')
         else:
             messagebox.showinfo(title='警告',message='保存错误，请检查是否是否运行过分割功能')
             pass
     
     def process_image(self):
+        if self.physic_distance == 0:
+            messagebox.showinfo(title='警告',message='自动识别标尺失误，不要关闭本窗口，请前往"config"文件夹下手动修改第四行的值，修改后点ok')
+            with open(self.workspace + '/config/'+self.image_file_path.split('/')[-1].split('.')[0]+'_scalebar_cofig.txt', 'r') as f:
+                lines = f.readlines()
+            self.physic_distance = int(float(lines[3].strip().split('\n')[0]))
         self.masks = p2d.segment_anything_process(self.image_file_path, self.weight, self.device, self.model_type)
         self.result = p2d.segments_statistice(self.masks, self.pixel_distance, self.physic_distance)
+
         # 显示mask的分割结果
         fig = p2d.show_segments(self.image_file_path, self.masks)
         fig.set_size_inches(self.canvas2.winfo_width()/fig.dpi, self.canvas2.winfo_height()/fig.dpi)
         canvas2 = FigureCanvasTkAgg(fig, master=self.canvas2)
         canvas2.get_tk_widget().pack()
         # 显示粒径统计结果
-        fig_stat = p2d.show_result(self.result[0], self.result[1], 100)
+        fig_stat = p2d.show_result(self.result[0], self.result[1], plot_label='circle_dia/um', bin_s=100)
         fig_stat.set_size_inches(self.canvas3.winfo_width()/fig_stat.dpi, 1.5*self.canvas3.winfo_height()/fig_stat.dpi)
         canvas3 = FigureCanvasTkAgg(fig_stat, master=self.canvas3)
         canvas3.get_tk_widget().pack()
         plt.close('all')
+    # 保存分割结果到export文件夹下，格式为二进制pickle文件
+    def save_masks(self):
+        if self.result is not None:
+            folder_path = self.workspace + r'/export data/' + self.image_file_path.split('/')[-1].split('.')[0]
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+                print(f"文件夹 '{folder_path}' 不存在，已成功创建。")
+            file_name = self.image_file_path.split('/')[-1].split('.')[0]
+            # 将列表保存为二进制文件
+            with open(folder_path+r'/'+file_name+'_masks.pkl', 'wb') as file:
+                pickle.dump(self.masks, file)
+            messagebox.showinfo(title='警告',message='保存成功')
+        else:
+            messagebox.showinfo(title='警告',message='保存错误，请检查是否是否运行过分割功能')
+            pass
+    # 从保存的pickle文件读取上次的分割结果
+    def read_pickle(self):
+        masks_path = filedialog.askopenfilename(filetypes=[("Pickle File", "*.pkl")])
+        # 从二进制文件中加载列表
+        with open(masks_path, 'rb') as file:
+            self.masks = pickle.load(file)
+        image_name = masks_path.split('/')[-1].split('_masks')[0]
+        pickle_image_path = os.path.dirname(os.path.abspath(__file__))+'/image/'+image_name+'.jpg'
+        if os.path.exists(pickle_image_path):
+            self.image_file_path = pickle_image_path
+        else:
+            print(f"文件 '{pickle_image_path}' 不存在")
+            messagebox.showinfo(title='提示',message='请选择相应图片文件')
 
     def showMasks(self):
         if self.masks:
@@ -256,16 +305,21 @@ class PATCL2DistrGUI:
         else:
             messagebox.showinfo(title='警告',message='无数据')
     def showStatistics(self):
-        if self.masks:
-            p2d.show_result(self.result[0], self.result[1], 100)
+        try:
+            p2d.show_result(self.result[0], self.result[1], 'circle_dia/um', 100)
             plt.show()
-        else:
-            messagebox.showinfo(title='警告',message='无数据')
+        except AttributeError:
+            messagebox.showinfo(title='警告',message='无数据, 情先进行数据处理')
+        except TypeError:
+            messagebox.showinfo(title='警告',message='请使用Plot Statistics功能查看统计数据')
     def set_workspace(self):
         self.workspace = filedialog.askdirectory(initialdir=r'/Users/helong/code learning/packing')
+    def set_scalebar_module(self):
+        self.scalebar_module = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.png")])
+    # 用一个包含粒径分布数据的csv做柱状图
     def plot_bar_from_csv(self):
         csv_path = filedialog.askopenfilename(initialdir=self.workspace + r'/export data', filetypes=[("CSV files", "*.csv")])
-        p2d.plot_histogram_from_csv(csv_path, 100)
+        p2d.plot_histogram_from_csv(csv_path,'circle_dia/um', 100)
     # 把两个包含粒径统计信息的csv文件合并成一个，并生成一个包含新统计数据的csv，都放置在工作目录文件夹下
     def merge_two_csv(self):
         self.csv1_path, self.csv2_path = None, None
@@ -302,14 +356,14 @@ class PATCL2DistrGUI:
             csv1 = pd.read_csv(self.csv1_path)
             csv2 = pd.read_csv(self.csv2_path)
             merged_csv = pd.concat([csv1, csv2], ignore_index=True)
-            merged_csv.to_csv(self.workspace+'/'+
+            merged_csv.to_csv(self.workspace+r'/export data/'+
                             self.csv1_path.split('/')[-1].split('.')[0]+'_'+
                             self.csv2_path.split('/')[-1].split('.')[0]+'_merged.csv', 
                             index=False)
             merged_stati = round(pd.concat([merged_csv.mean(), merged_csv.std(), merged_csv.median(), 
                                             merged_csv.quantile(0.9), merged_csv.quantile(0.99)], axis=1).T, 1)
             merged_stati.index = ['average', 'standardization', 'D50', 'D90', 'D99']
-            merged_stati.to_csv(self.workspace+'/'+
+            merged_stati.to_csv(self.workspace+r'/Diagnosis/'+
                             self.csv1_path.split('/')[-1].split('.')[0]+'_'+
                             self.csv2_path.split('/')[-1].split('.')[0]+'_mergedStati.csv', 
                             index=True)
@@ -317,9 +371,82 @@ class PATCL2DistrGUI:
 
         open_popup()
         
+    # 选择多个包含粒径信息的csv，根据config.py中的筛网组别重新进行粒径统计，结果保存在export data下
+    def count_particle_from_range(self):
+        selecting_window = tk.Toplevel(self.master)
+        selecting_window.title("Recount Size Distribution")
+        
+        # 添加文件选择框
+        file_label = tk.Label(selecting_window, text="Selected CSV Files:")
+        file_label.pack(pady=(0, 5))
+        
+        file_text = tk.Text(selecting_window, height=5, width=40)
+        file_text.pack(pady=(0, 10))
+        
+        # 添加纵向滚动条
+        scrollbar = tk.Scrollbar(selecting_window, command=file_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        file_text.config(yscrollcommand=scrollbar.set)
+        
+        # 添加下拉列表框
+        label = tk.Label(selecting_window, text="Select Option:")
+        label.pack(pady=(10, 5))
+        
+        options = scf.Sieves_group                                 # 从外部文件读取选项
+        option_var = tk.StringVar(selecting_window)
+        option_var.set(options[0])
+        option_menu = tk.OptionMenu(selecting_window, option_var, *options)
+        option_menu.pack(pady=(0, 10))
+
+        self.pristine_csv_paths = None
+        def select_file():
+            self.pristine_csv_paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+            if self.pristine_csv_paths:
+                file_text.delete(1.0, tk.END)
+                for file_path in self.pristine_csv_paths:
+                    file_text.insert(tk.END, file_path + '\n')
+        
+        def process_files():
+            print(self.pristine_csv_paths)
+            range_list = list(eval(option_var.get()))
+            print(range_list, type(range_list))
+            # 在这里添加处理文件的代码
+            if isinstance(self.pristine_csv_paths, tuple):
+                for file in self.pristine_csv_paths:
+                    pris_df = pd.read_csv(file)
+                    recount_csv = p2d.count_particle_from_range(pris_df, range_list)
+                    recount_csv.to_csv(os.path.dirname(os.path.abspath(__file__))+r'/export data/'+
+                                       file.split('/')[-1].split('.csv')[0]+'_ReCount.csv', 
+                                       index=False)
+            else:
+                print('请选择文件')
+                pass
+        
+        select_button = tk.Button(selecting_window, text="Select Files", command=select_file)
+        select_button.pack(pady=5)
+        
+        process_button = tk.Button(selecting_window, text="Process Files", command=process_files)
+        process_button.pack(pady=(5, 10))
+
+    # database的格式如example0.csv所示，第一列是筛网大小(um)，默认大于等于筛网的颗粒无法通过，从第二列开始是不同样品的粒径分布数据，第一行是样品名，第二行是对应样品的振实密度
+    def batch_optimization(self):
+        csv_selector = bop.CSVSelector()
+        csv_selector.run()
+
+    @staticmethod # 调用外部R语言编写的程序引用来源:github
+    def parSD():
+        # 指定目标文件夹路径
+        target_folder = r'/Users/helong/code learning/packing/App/SOFTX-D-21-00030-main/parsd_v1-2'
+        # 使用os.chdir()改变当前工作目录到目标文件夹
+        os.chdir(target_folder)
+        # 调用R语言文件
+        r('source("main.R")')
+
+    def show_help(self):
+        tk.messagebox.showinfo("注意", "程序自动识别标尺的默认单位是微米#um#, 使用时情格外注意检查数据的单位")
 
     def show_about(self):
-        tk.messagebox.showinfo("关于", "这是一个用于处理图像的软件")
+        tk.messagebox.showinfo("关于", "这是一个用于处理图像的软件\n项目地址: https://github.com/xieshentoken/SAM-patcl2distr")
 
 # 创建弹窗-----------------------------------------------------------------------------------------------------------
 class SAM_Config(tk.Toplevel):
