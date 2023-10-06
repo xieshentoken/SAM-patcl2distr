@@ -32,6 +32,7 @@ def scalebar_config(img_file, scalebar_cofig_file=r'/Users/helong/code learning/
     text = pytesseract.image_to_string(blank)
     pattern = r'(\d+\.\d+)\s*(um|nm)'
     matches = re.findall(pattern, text)
+    number, unit = 0, 'um'
     for match in matches:
         number, unit = match
     physic_distance = int(float(number))
@@ -190,12 +191,12 @@ def show_segments(image_file_name, masks):
     return fig
 
 # 绘制尺径分布图
-def show_result(stati, stati_data, bin_s=100):
+def show_result(stati, stati_data, plot_label='circle_dia/um', bin_s=100):
     fig = plt.figure(figsize=(15, 3))
-    hist, bins = np.histogram(stati['circle_dia/um'], bins=bin_s)
+    hist, bins = np.histogram(stati[plot_label], bins=bin_s)
     plt.bar(bins[:-1], hist, width=np.diff(bins), ec='k')
 
-    plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data['circle_dia/um'][0],stati_data['circle_dia/um'][1],stati['circle_dia/um'].max(),stati_data['circle_dia/um'][2],stati_data['circle_dia/um'][3],stati_data['circle_dia/um'][4])) 
+    plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][0],stati_data[plot_label][1],stati[plot_label].max(),stati_data[plot_label][2],stati_data[plot_label][3],stati_data[plot_label][4])) 
     plt.grid(axis='y', alpha=0.3)
     plt.xlabel('particle size(um)')
     plt.ylabel('frequency')
@@ -203,19 +204,106 @@ def show_result(stati, stati_data, bin_s=100):
     # plt.show()
     return fig
 
-def plot_histogram_from_csv(csv_path, bin_s=100):
+def plot_histogram_from_csv(csv_path, plot_label='circle_dia/um', bin_s=100):
     stati = pd.read_csv(csv_path)
     # 统计均值、标准差、D50、D90、D99保存于stati_data中
     stati_data = round(pd.concat([stati.mean(), stati.std(), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 1)
     stati_data.index = ['average', 'standardization', 'D50', 'D90', 'D99']
     
     plt.figure(figsize=(15, 3))
-    hist, bins = np.histogram(stati['circle_dia/um'], bins=bin_s)
+    hist, bins = np.histogram(stati[plot_label], bins=bin_s)
     plt.bar(bins[:-1], hist, width=np.diff(bins), ec='k')
 
-    plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data['circle_dia/um'][0],stati_data['circle_dia/um'][1],stati['circle_dia/um'].max(),stati_data['circle_dia/um'][2],stati_data['circle_dia/um'][3],stati_data['circle_dia/um'][4])) 
+    plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][0],stati_data[plot_label][1],stati[plot_label].max(),stati_data[plot_label][2],stati_data[plot_label][3],stati_data[plot_label][4])) 
     plt.grid(axis='y', alpha=0.3)
     plt.xlabel('particle size(um)')
     plt.ylabel('frequency')
     plt.tight_layout()
     plt.show()
+
+# 计算dinger-funk方程的CPFT
+def dinger_funk_CPFT(D, Ds, Dl, n=0.333):
+    if D < Ds:
+        return 0.
+    elif (D >= Ds) and (D <= Dl):
+        numerator = D**n - Ds**n
+        denominator = Dl**n - Ds**n
+        CPFT = round(100*numerator/denominator, 2)
+        print('Diameter: {} CPFT(%): {}'.format(D,CPFT))
+        return CPFT
+    elif D > Dl:
+        return 100.
+
+# 根据包含粒径分布的dataframe, 生成并返回新的CPFT数据
+def distr_to_CPFT(pris_df, col_name=None):
+    # 先对传入的数据按列进行归一化，再乘以100
+    column_sums = pris_df.sum()
+    print(column_sums, type(column_sums))
+    if (column_sums == 100.).all():
+        normalized_pris_df = pris_df
+    elif not (column_sums == 100.).all():
+        normalized_pris_df = pris_df.div(0.01 * column_sums, axis=1)
+    CPFT_df = pd.DataFrame()
+    if isinstance(col_name, str):
+        # 如果指定的列名是一个字符串，则只对dataframe指定列进行累计求和
+        CPFT_df[str(col_name)+'_CPFT'] = normalized_pris_df[col_name].cumsum()
+    elif isinstance(col_name, list):
+        # 如果指定的列名是一个list，则依次累积求和
+        for col in col_name:
+            CPFT_df[str(col)+'_CPFT'] = normalized_pris_df[col].cumsum()
+    elif col_name is None:
+        # 未指定列名，默认对所有列进行累计求和
+        CPFT_df = normalized_pris_df.cumsum()
+        CPFT_df = CPFT_df.add_suffix('_CPFT')   # 将列名修改为带有后缀的形式
+        # for col in normalized_pris_df.columns:
+        #     CPFT_df[str(col)+'_CPFT'] = normalized_pris_df[col].cumsum()
+    return CPFT_df
+
+# 统计落在 'range_list' 列中各个数字之间的颗粒数量，##默认与Sieves大小相等的颗粒无法过筛##
+def count_particle_from_range(distr_df, range_list, col_name=None):
+    count_dict = {}
+    if isinstance(col_name, str):
+        # 如果col_name是个string，只对dataframe指定列进行计数
+        count = distr_df[distr_df[col_name] < range_list[0]][col_name].count()
+        count_dict[f'{range_list[0]}'] = count
+        for i in range(len(range_list)-1):
+            count = distr_df[(distr_df[col_name] >= range_list[i]) & (distr_df[col_name] < range_list[i+1])][col_name].count()
+            count_dict[f'{range_list[i+1]}'] = count
+        reCount_df = pd.DataFrame(list(count_dict.items()), columns=['Sieves', col_name+'Count']).astype(float)
+    elif isinstance(col_name, list):
+        # 如果指定的列名是一个list，则依次计数
+        reCount_df = pd.DataFrame({'Sieves':range_list})
+        for col in col_name:
+            temp = {}
+            count = distr_df[distr_df[col] < range_list[0]][col].count()
+            temp[f'{range_list[0]}'] = count
+            for i in range(len(range_list)-1):
+                count = distr_df[(distr_df[col] >= range_list[i]) & (distr_df[col] < range_list[i+1])][col].count()
+                temp[f'{range_list[i+1]}'] = count
+            temp = pd.DataFrame(list(temp.items()), columns=['Sieves', col+'Count'])
+            temp = temp.astype(float)
+            reCount_df = pd.merge(temp, reCount_df, on='Sieves', how='outer')
+    elif col_name is None:
+        # 如果未指定，则默认对所有列计数
+        reCount_df = pd.DataFrame({'Sieves':range_list})
+        for col in distr_df.columns:
+            temp = {}
+            count = distr_df[distr_df[col] < range_list[0]][col].count()
+            temp[f'{range_list[0]}'] = count
+            for i in range(len(range_list)-1):
+                count = distr_df[(distr_df[col] >= range_list[i]) & (distr_df[col] < range_list[i+1])][col].count()
+                temp[f'{range_list[i+1]}'] = count
+            temp = pd.DataFrame(list(temp.items()), columns=['Sieves', col+'Count'])
+            # print(temp)
+            temp = temp.astype(float)
+            reCount_df = pd.merge(temp, reCount_df, on='Sieves', how='outer')
+    return reCount_df
+
+# 计算各种配比的双组份混合粉体与根据model计算的最密堆积间的相关系数
+def corrcoef_to_model(goal_df, model_df):
+    # 计算所有列与model的相关系数
+    corr_series = goal_df.corrwith(model_df.iloc[:,1])
+    # 将结果转换为DataFrame
+    corr_df = pd.DataFrame(corr_series, columns=['R^2'])
+
+    return corr_df.T
