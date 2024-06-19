@@ -140,10 +140,12 @@ def segments_statistice(masks, pixel_distance, physic_distance):
 
     stati = np.concatenate([np.array(areas).reshape(len(masks),1), np.array(contour_area).reshape(len(masks),1), np.array(contour_len).reshape(len(masks),1)],axis=1)
     stati = pd.DataFrame(stati, columns=['area','cv2_area', 'cv2_length'])
-    # 用segment-anything的model计算的面积进行换算，分别以圆形和正方形计算尺寸大小
+    # 用segment-anything的model计算的面积进行换算，以圆形计算尺寸大小
     stati.insert(3, 'circle_dia/um', stati['area'].apply(lambda x: round(np.sqrt(x/np.pi)/pixel_distance*2*physic_distance,1)))
-    stati.insert(4, 'square_dia/um', stati['area'].apply(lambda x: round(np.sqrt(x)/pixel_distance*physic_distance,1)))
     stati.drop([0,1], axis=0, inplace=True)        # 当图片中包含比例尺时执行此行，drop删除前两个mask，第一个mask是背景，第二个mask是比例尺
+    stati.insert(4, 'sphereVol_percent', stati['area'].apply(lambda x: x**1.5))  # 通过面积计算对应的球体积
+    total_vol = stati['sphereVol_percent'].sum() # 计算各个尺寸球所占总的体积比例
+    stati['sphereVol_percent'] = stati['sphereVol_percent']/total_vol*100
     # 统计均值、标准差、D50、D90、D99保存于stati_data中
     stati_data = round(pd.concat([stati.mean(), stati.std(), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 1)
     stati_data.index = ['average', 'standardization', 'D50', 'D90', 'D99']
@@ -193,8 +195,13 @@ def show_segments(image_file_name, masks):
 # 绘制尺径分布图
 def show_result(stati, stati_data, plot_label='circle_dia/um', bin_s=100):
     fig = plt.figure(figsize=(15, 3))
-    hist, bins = np.histogram(stati[plot_label], bins=bin_s)
-    plt.bar(bins[:-1], hist, width=np.diff(bins), ec='k')
+    if bin_s != -1:
+        # 绘制柱状图
+        hist, bins = np.histogram(stati[plot_label], bins=bin_s)
+        plt.bar(bins[:-1], hist, width=np.diff(bins), ec='k')
+    elif bin_s == -1:
+        # 绘制对数坐标散点图
+        plt.semilogx(stati[plot_label], stati['sphereVol_percent'], 'o', label='circle_dia')
 
     plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][0],stati_data[plot_label][1],stati[plot_label].max(),stati_data[plot_label][2],stati_data[plot_label][3],stati_data[plot_label][4])) 
     plt.grid(axis='y', alpha=0.3)
@@ -218,6 +225,23 @@ def plot_histogram_from_csv(csv_path, plot_label='circle_dia/um', bin_s=100):
     plt.grid(axis='y', alpha=0.3)
     plt.xlabel('particle size(um)')
     plt.ylabel('frequency')
+    plt.tight_layout()
+    plt.show()
+
+def plot_logline_from_csv(csv_path, plot_label_x='Sieves', plot_label_y='Vol_percent_range'):
+    stati = pd.read_csv(csv_path)
+    # 统计均值、标准差、D50、D90、D99保存于stati_data中
+    stati_data = round(pd.concat([stati.std(), stati.quantile(0.1), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 1)
+    stati_data.index = ['standardization', 'D10', 'D50', 'D90', 'D99']
+    
+    plt.figure(figsize=(15, 3))
+    
+    plt.semilogx(stati[plot_label_x], stati[plot_label_y], marker='o', linestyle='-', label='Data Points')
+
+    plt.title('std:{}  max:{}  D10:{}  D50:{}  D90:{}  D99:{}  um'.format(stati_data[plot_label_y][0],round(stati[plot_label_y].max(),1),stati_data[plot_label_y][1],stati_data[plot_label_y][2],stati_data[plot_label_y][3],stati_data[plot_label_y][4])) 
+    plt.grid(axis='y', alpha=0.3)
+    plt.xlabel('particle size(um)')
+    plt.ylabel('volumn frequency(%)')
     plt.tight_layout()
     plt.show()
 
@@ -284,8 +308,9 @@ def count_particle_from_range(distr_df, range_list, col_name=None):
             temp = temp.astype(float)
             reCount_df = pd.merge(temp, reCount_df, on='Sieves', how='outer')
     elif col_name is None:
-        # 如果未指定，则默认对所有列计数
+        # 如果未指定，则默认对所有列计数，但只对circle_dia/um列进行筛分
         reCount_df = pd.DataFrame({'Sieves':range_list})
+        result = {r: 0 for r in range_list}
         for col in distr_df.columns:
             temp = {}
             count = distr_df[distr_df[col] < range_list[0]][col].count()
@@ -293,10 +318,22 @@ def count_particle_from_range(distr_df, range_list, col_name=None):
             for i in range(len(range_list)-1):
                 count = distr_df[(distr_df[col] >= range_list[i]) & (distr_df[col] < range_list[i+1])][col].count()
                 temp[f'{range_list[i+1]}'] = count
+                # 获取当前区间范围
+                range_start, range_end = range_list[i], range_list[i+1]
+                # 选取dia列中处于当前区间的值
+                mask = (distr_df['circle_dia/um'] >= range_start) & (distr_df['circle_dia/um'] < range_end)
+                # 计算对应Vol_percent的和
+                vol_percent_sum = distr_df.loc[mask, 'sphereVol_percent'].sum()
+                # 更新result字典
+                result[range_start] = vol_percent_sum
+            # 创建新的DataFrame,存储体积百分比数据
+            new_df = pd.DataFrame({'Sieves': range_list, 'Vol_percent_range': [result[r] for r in range_list]})
             temp = pd.DataFrame(list(temp.items()), columns=['Sieves', col+'Count'])
             # print(temp)
             temp = temp.astype(float)
             reCount_df = pd.merge(temp, reCount_df, on='Sieves', how='outer')
+        reCount_df = pd.merge(reCount_df, new_df, on='Sieves', how='outer')
+
     return reCount_df
 
 # 计算各种配比的双组份混合粉体与根据model计算的最密堆积间的相关系数

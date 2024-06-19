@@ -125,12 +125,13 @@ class PATCL2DistrGUI:
                          ('Show Statistics',(None, self.showStatistics)),
                          ('-1',(None, None)), 
                          ('Plot Statistics',(None, self.plot_bar_from_csv)), 
+                         ('Plot Distribution',(None, self.plot_logline_from_csv)), 
                          ('-2',(None, None)), 
                          ('Merge csv',(None, self.merge_two_csv)),
                          ('Size count',(None, self.count_particle_from_range)),
                 ]),
             OrderedDict([('ParSD Optimization',(None, self.parSD)), 
-                         ('Batch Optimization(2~3 compound)',(None, self.batch_optimization)), 
+                         ('Batch Optimization',(None, self.batch_optimization)), 
               ]),
             OrderedDict([('Help',(None, self.show_help)), 
                 ('-1',(None, None)),
@@ -186,7 +187,7 @@ class PATCL2DistrGUI:
 
     # 加载图片，并从config文件夹中查找是否有标尺信息，如果没有则报出提示
     def load_image(self):
-        self.image_file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.png")])
+        self.image_file_path = filedialog.askopenfilename(initialdir=self.workspace+r'/image', filetypes=[("Image files", "*.jpg *.png")])
         if self.image_file_path:
             self.image_file_adr.set(self.image_file_path.split('/')[-1])
         try:
@@ -253,6 +254,7 @@ class PATCL2DistrGUI:
         self.masks = p2d.segment_anything_process(self.image_file_path, self.weight, self.device, self.model_type)
         self.result = p2d.segments_statistice(self.masks, self.pixel_distance, self.physic_distance)
 
+        print('Processing...')
         # 显示mask的分割结果
         fig = p2d.show_segments(self.image_file_path, self.masks)
         fig.set_size_inches(self.canvas2.winfo_width()/fig.dpi, self.canvas2.winfo_height()/fig.dpi)
@@ -320,6 +322,10 @@ class PATCL2DistrGUI:
     def plot_bar_from_csv(self):
         csv_path = filedialog.askopenfilename(initialdir=self.workspace + r'/export data', filetypes=[("CSV files", "*.csv")])
         p2d.plot_histogram_from_csv(csv_path,'circle_dia/um', 100)
+    # 用一个包含粒径分布数据的csv做散点图
+    def plot_logline_from_csv(self):
+        csv_path = filedialog.askopenfilename(initialdir=self.workspace + r'/export data', filetypes=[("CSV files", "*.csv")])
+        p2d.plot_logline_from_csv(csv_path,'Sieves', 'Vol_percent_range')
     # 把两个包含粒径统计信息的csv文件合并成一个，并生成一个包含新统计数据的csv，都放置在工作目录文件夹下
     def merge_two_csv(self):
         self.csv1_path, self.csv2_path = None, None
@@ -371,7 +377,7 @@ class PATCL2DistrGUI:
 
         open_popup()
         
-    # 选择多个包含粒径信息的csv，根据config.py中的筛网组别重新进行粒径统计，结果保存在export data下
+    # 选择多个包含粒径信息的csv，根据config.py中的筛网组别重新进行粒径统计，结果保存在原csv文件目录下
     def count_particle_from_range(self):
         selecting_window = tk.Toplevel(self.master)
         selecting_window.title("Recount Size Distribution")
@@ -392,11 +398,33 @@ class PATCL2DistrGUI:
         label = tk.Label(selecting_window, text="Select Option:")
         label.pack(pady=(10, 5))
         
-        options = scf.Sieves_group                                 # 从外部文件读取选项
+        '''options = scf.Sieves_group                                 # 从外部文件读取选项
         option_var = tk.StringVar(selecting_window)
         option_var.set(options[0])
         option_menu = tk.OptionMenu(selecting_window, option_var, *options)
+        option_menu.pack(pady=(0, 10))'''
+
+        # 创建一个新列表,用于下拉菜单显示
+        display_options = []
+        for i, l in enumerate(scf.Sieves_group):
+            display_options.append(f'{i+1}: [From {min(l):.2f} to {max(l):.2f}]')
+
+        # 创建主窗口和下拉菜单
+        option_var = tk.StringVar(selecting_window)
+        option_var.set(display_options[0])
+        option_menu = tk.OptionMenu(selecting_window, option_var, *display_options)
         option_menu.pack(pady=(0, 10))
+
+        # 当用户选择某个选项时,获取对应的原始数据列表
+        def get_original_list(name, index, mode):
+            selected_option = option_var.get()
+            for i, l in enumerate(scf.Sieves_group):
+                display_str = f'{i+1}: [From {min(l):.2f} to {max(l):.2f}]'
+                if selected_option == display_str:
+                    print(l)
+
+        # 使用 trace_add 方法绑定事件处理函数
+        option_var.trace_add('write', get_original_list)
 
         self.pristine_csv_paths = None
         def select_file():
@@ -408,14 +436,14 @@ class PATCL2DistrGUI:
         
         def process_files():
             print(self.pristine_csv_paths)
-            range_list = list(eval(option_var.get()))
+            range_list = scf.Sieves_group[int(option_var.get().split(':')[0])-1]
             print(range_list, type(range_list))
             # 在这里添加处理文件的代码
             if isinstance(self.pristine_csv_paths, tuple):
                 for file in self.pristine_csv_paths:
                     pris_df = pd.read_csv(file)
                     recount_csv = p2d.count_particle_from_range(pris_df, range_list)
-                    recount_csv.to_csv(os.path.dirname(os.path.abspath(__file__))+r'/export data/'+
+                    recount_csv.to_csv(os.path.dirname(self.pristine_csv_paths[0])+'/'+
                                        file.split('/')[-1].split('.csv')[0]+'_ReCount.csv', 
                                        index=False)
             else:
