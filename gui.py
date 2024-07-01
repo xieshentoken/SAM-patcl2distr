@@ -187,7 +187,7 @@ class PATCL2DistrGUI:
 
     # 加载图片，并从config文件夹中查找是否有标尺信息，如果没有则报出提示
     def load_image(self):
-        self.image_file_path = filedialog.askopenfilename(initialdir=self.workspace+r'/image', filetypes=[("Image files", "*.jpg *.png")])
+        self.image_file_path = filedialog.askopenfilename(initialdir=self.workspace+r'/image', filetypes=[("Image files", "*.jpg *.jpeg *.png")])
         if self.image_file_path:
             self.image_file_adr.set(self.image_file_path.split('/')[-1])
         try:
@@ -240,6 +240,12 @@ class PATCL2DistrGUI:
             file_name = self.image_file_path.split('/')[-1].split('.')[0]
             self.result[0].to_csv(folder_path+'/'+file_name+'_particle.csv', index=False)            # 粒径分布结果
             self.result[1].to_csv(folder_path2+'/'+file_name+'_statistics.csv', index=True)           # 统计结果
+            p2d.show_result(self.result[0], self.result[1], 'circle_dia/um', 100)
+            plt.savefig(folder_path+'/'+file_name+'_statistics.png')
+            plt.close()
+            p2d.show_segments(self.image_file_path, self.masks)
+            plt.savefig(folder_path+'/'+file_name+'_segment.png')
+            plt.close()
             messagebox.showinfo(title='警告',message='保存成功')
         else:
             messagebox.showinfo(title='警告',message='保存错误，请检查是否是否运行过分割功能')
@@ -346,13 +352,13 @@ class PATCL2DistrGUI:
             button_ok.pack(pady=20)
 
         def select_file1():
-            file1 = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+            file1 = filedialog.askopenfilename(initialdir=self.workspace + r'/export data', filetypes=[("CSV files", "*.csv")])
             if file1:
                 self.label_file1.config(text=file1)
                 self.csv1_path = file1
 
         def select_file2():
-            file2 = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+            file2 = filedialog.askopenfilename(initialdir=self.workspace + r'/export data', filetypes=[("CSV files", "*.csv")])
             if file2:
                 self.label_file2.config(text=file2)
                 self.csv2_path = file2
@@ -362,12 +368,16 @@ class PATCL2DistrGUI:
             csv1 = pd.read_csv(self.csv1_path)
             csv2 = pd.read_csv(self.csv2_path)
             merged_csv = pd.concat([csv1, csv2], ignore_index=True)
+            merged_csv.drop('sphereVol_percent', axis=1, inplace=True)
+            merged_csv.insert(4, 'sphereVol_percent', merged_csv['area'].apply(lambda x: x**1.5))
+            total_vol = merged_csv['sphereVol_percent'].sum() # 计算各个尺寸球所占总的体积比例
+            merged_csv['sphereVol_percent'] = merged_csv['sphereVol_percent']/total_vol*100
             merged_csv.to_csv(self.workspace+r'/export data/'+
                             self.csv1_path.split('/')[-1].split('.')[0]+'_'+
                             self.csv2_path.split('/')[-1].split('.')[0]+'_merged.csv', 
                             index=False)
             merged_stati = round(pd.concat([merged_csv.mean(), merged_csv.std(), merged_csv.median(), 
-                                            merged_csv.quantile(0.9), merged_csv.quantile(0.99)], axis=1).T, 1)
+                                            merged_csv.quantile(0.9), merged_csv.quantile(0.99)], axis=1).T, 3)
             merged_stati.index = ['average', 'standardization', 'D50', 'D90', 'D99']
             merged_stati.to_csv(self.workspace+r'/Diagnosis/'+
                             self.csv1_path.split('/')[-1].split('.')[0]+'_'+
@@ -428,7 +438,7 @@ class PATCL2DistrGUI:
 
         self.pristine_csv_paths = None
         def select_file():
-            self.pristine_csv_paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+            self.pristine_csv_paths = filedialog.askopenfilenames(initialdir=self.workspace + r'/export data', filetypes=[("CSV files", "*.csv")])
             if self.pristine_csv_paths:
                 file_text.delete(1.0, tk.END)
                 for file_path in self.pristine_csv_paths:

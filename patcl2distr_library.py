@@ -141,13 +141,13 @@ def segments_statistice(masks, pixel_distance, physic_distance):
     stati = np.concatenate([np.array(areas).reshape(len(masks),1), np.array(contour_area).reshape(len(masks),1), np.array(contour_len).reshape(len(masks),1)],axis=1)
     stati = pd.DataFrame(stati, columns=['area','cv2_area', 'cv2_length'])
     # 用segment-anything的model计算的面积进行换算，以圆形计算尺寸大小
-    stati.insert(3, 'circle_dia/um', stati['area'].apply(lambda x: round(np.sqrt(x/np.pi)/pixel_distance*2*physic_distance,1)))
+    stati.insert(3, 'circle_dia/um', stati['area'].apply(lambda x: round(np.sqrt(x/np.pi)/pixel_distance*2*physic_distance,3)))
     stati.drop([0,1], axis=0, inplace=True)        # 当图片中包含比例尺时执行此行，drop删除前两个mask，第一个mask是背景，第二个mask是比例尺
     stati.insert(4, 'sphereVol_percent', stati['area'].apply(lambda x: x**1.5))  # 通过面积计算对应的球体积
     total_vol = stati['sphereVol_percent'].sum() # 计算各个尺寸球所占总的体积比例
     stati['sphereVol_percent'] = stati['sphereVol_percent']/total_vol*100
     # 统计均值、标准差、D50、D90、D99保存于stati_data中
-    stati_data = round(pd.concat([stati.mean(), stati.std(), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 1)
+    stati_data = round(pd.concat([stati.mean(), stati.std(), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 3)
     stati_data.index = ['average', 'standardization', 'D50', 'D90', 'D99']
     return stati, stati_data
 
@@ -203,7 +203,7 @@ def show_result(stati, stati_data, plot_label='circle_dia/um', bin_s=100):
         # 绘制对数坐标散点图
         plt.semilogx(stati[plot_label], stati['sphereVol_percent'], 'o', label='circle_dia')
 
-    plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][0],stati_data[plot_label][1],stati[plot_label].max(),stati_data[plot_label][2],stati_data[plot_label][3],stati_data[plot_label][4])) 
+    plt.title('std:{}  max:{}  D10:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][1],stati[plot_label].max(),p2d_D(stati,target=10),p2d_D(stati,target=50),p2d_D(stati,target=90),p2d_D(stati,target=99))) 
     plt.grid(axis='y', alpha=0.3)
     plt.xlabel('particle size(um)')
     plt.ylabel('frequency')
@@ -213,15 +213,15 @@ def show_result(stati, stati_data, plot_label='circle_dia/um', bin_s=100):
 
 def plot_histogram_from_csv(csv_path, plot_label='circle_dia/um', bin_s=100):
     stati = pd.read_csv(csv_path)
-    # 统计均值、标准差、D50、D90、D99保存于stati_data中
-    stati_data = round(pd.concat([stati.mean(), stati.std(), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 1)
+    # 统计均值、标准差保存于stati_data中
+    stati_data = round(pd.concat([stati.mean(), stati.std(), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 3)
     stati_data.index = ['average', 'standardization', 'D50', 'D90', 'D99']
     
     plt.figure(figsize=(15, 3))
     hist, bins = np.histogram(stati[plot_label], bins=bin_s)
     plt.bar(bins[:-1], hist, width=np.diff(bins), ec='k')
 
-    plt.title('mean:{}  std:{}  max:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][0],stati_data[plot_label][1],stati[plot_label].max(),stati_data[plot_label][2],stati_data[plot_label][3],stati_data[plot_label][4])) 
+    plt.title('std:{}  max:{}  D10:{}  D50:{}  D90:{}  D99:{}  unit:um'.format(stati_data[plot_label][1],stati[plot_label].max(),p2d_D(stati,target=10),p2d_D(stati,target=50),p2d_D(stati,target=90),p2d_D(stati,target=99))) 
     plt.grid(axis='y', alpha=0.3)
     plt.xlabel('particle size(um)')
     plt.ylabel('frequency')
@@ -230,15 +230,12 @@ def plot_histogram_from_csv(csv_path, plot_label='circle_dia/um', bin_s=100):
 
 def plot_logline_from_csv(csv_path, plot_label_x='Sieves', plot_label_y='Vol_percent_range'):
     stati = pd.read_csv(csv_path)
-    # 统计均值、标准差、D50、D90、D99保存于stati_data中
-    stati_data = round(pd.concat([stati.std(), stati.quantile(0.1), stati.median(), stati.quantile(0.9), stati.quantile(0.99)], axis=1).T, 1)
-    stati_data.index = ['standardization', 'D10', 'D50', 'D90', 'D99']
-    
+
     plt.figure(figsize=(15, 3))
     
     plt.semilogx(stati[plot_label_x], stati[plot_label_y], marker='o', linestyle='-', label='Data Points')
 
-    plt.title('std:{}  max:{}  D10:{}  D50:{}  D90:{}  D99:{}  um'.format(stati_data[plot_label_y][0],round(stati[plot_label_y].max(),1),stati_data[plot_label_y][1],stati_data[plot_label_y][2],stati_data[plot_label_y][3],stati_data[plot_label_y][4])) 
+    plt.title('Volumn Frequency of '+csv_path.split('/')[-1].split('.')[0]) 
     plt.grid(axis='y', alpha=0.3)
     plt.xlabel('particle size(um)')
     plt.ylabel('volumn frequency(%)')
@@ -344,3 +341,23 @@ def corrcoef_to_model(goal_df, model_df):
     corr_df = pd.DataFrame(corr_series, columns=['R^2'])
 
     return corr_df.T
+
+# 依据体积计算D10,D50,D90,D99等的函数
+def p2d_D(input_df, cumulatedVol_col='sphereVol_percent', dia_col='circle_dia/um', target=50):
+    # 依据直径列从小到大排序
+    df = input_df.sort_values(by=dia_col)
+    # 计算cumulatedVol_col列的累积和
+    df['cumulative_vol'] = df[cumulatedVol_col].cumsum()
+
+    # 找出cumulative_vol小于target_value的最大值和大于target_value的最小值
+    lower_bound = df[df['cumulative_vol'] < target]['cumulative_vol'].max()
+    upper_bound = df[df['cumulative_vol'] > target]['cumulative_vol'].min()
+
+    # 确定这两个值对应的直径值
+    lower_radius = df[df['cumulative_vol'] == lower_bound][dia_col].values[0]
+    upper_radius = df[df['cumulative_vol'] == upper_bound][dia_col].values[0]
+
+    # 使用线性插值公式计算
+    interpolated_radius = round((lower_radius + ((target - lower_bound) / (upper_bound - lower_bound)) * (upper_radius - lower_radius)),3)
+
+    return interpolated_radius
