@@ -484,7 +484,7 @@ class PATCL2DistrGUI:
         tk.messagebox.showinfo("注意", "程序自动识别标尺的默认单位是微米#um#, 使用时情格外注意检查数据的单位")
 
     def show_about(self):
-        tk.messagebox.showinfo("关于", "这是一个用于处理图像的软件\n项目地址: https://github.com/xieshentoken/SAM-patcl2distr")
+        tk.messagebox.showinfo("关于", "通过图像统计颗粒尺寸分布的软件\n项目地址: https://github.com/xieshentoken/SAM-patcl2distr")
 
 # 创建弹窗-----------------------------------------------------------------------------------------------------------
 class SAM_Config(tk.Toplevel):
